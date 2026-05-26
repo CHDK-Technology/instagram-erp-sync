@@ -1,0 +1,31 @@
+name: Instagram ERP Sync
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Script
+        env:
+          INSTAGRAM_ID: ${{ secrets.INSTAGRAM_ID }}
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+          ERP_URL: ${{ secrets.ERP_URL }}
+          API_KEY: ${{ secrets.API_KEY }}
+          API_SECRET: ${{ secrets.API_SECRET }}
+        run: python app.py
