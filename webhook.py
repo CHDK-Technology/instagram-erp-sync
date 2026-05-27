@@ -16,43 +16,70 @@ headers = {
     "Content-Type": "application/json"
 }
 
+
+# WEBHOOK VERIFICATION
+
 @app.route("/webhook", methods=["GET"])
 def verify():
+
+    print("VERIFY REQUEST RECEIVED")
+    print("ARGS:", request.args)
+
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
+    print("MODE:", mode)
+    print("TOKEN:", token)
+
     if mode and token:
         if mode == "subscribe" and token == VERIFY_TOKEN:
+            print("WEBHOOK VERIFIED SUCCESSFULLY")
             return challenge, 200
 
+    print("VERIFICATION FAILED")
     return "Verification failed", 403
 
 
+# WEBHOOK EVENTS
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
+
+    print("POST RECEIVED")
+
     data = request.json
     print("Webhook Data:", data)
 
     try:
         for entry in data.get("entry", []):
 
-            # LEAD FORM DATA
             changes = entry.get("changes", [])
 
             for change in changes:
+
+                print("CHANGE:", change)
+
                 if change.get("field") == "leadgen":
+
+                    print("LEADGEN EVENT RECEIVED")
 
                     leadgen_id = change["value"]["leadgen_id"]
 
+                    print("LEADGEN ID:", leadgen_id)
+
                     lead_url = f"https://graph.facebook.com/v25.0/{leadgen_id}"
+
                     params = {
                         "access_token": ACCESS_TOKEN
                     }
 
-                    lead_data = requests.get(lead_url, params=params).json()
+                    lead_data = requests.get(
+                        lead_url,
+                        params=params
+                    ).json()
 
-                    print("Lead Data:", lead_data)
+                    print("LEAD DATA:", lead_data)
 
                     field_data = lead_data.get("field_data", [])
 
@@ -61,11 +88,15 @@ def webhook():
                     }
 
                     for field in field_data:
+
                         name = field.get("name")
                         values = field.get("values", [])
 
                         if values:
+
                             value = values[0]
+
+                            print(f"FIELD: {name} = {value}")
 
                             if name == "full_name":
                                 lead["lead_name"] = value
@@ -81,13 +112,16 @@ def webhook():
 
                     lead["source"] = "Instagram Campaign"
 
+                    print("FINAL ERP LEAD PAYLOAD:", lead)
+
                     response = requests.post(
                         f"{ERP_URL}/api/resource/Lead",
                         json=lead,
                         headers=headers
                     )
 
-                    print("ERPNext Response:", response.text)
+                    print("ERP STATUS CODE:", response.status_code)
+                    print("ERP RESPONSE:", response.text)
 
         return "EVENT_RECEIVED", 200
 
