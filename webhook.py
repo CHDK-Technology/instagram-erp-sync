@@ -41,6 +41,7 @@ def verify():
     return "Verification failed", 403
 
 
+
 # WEBHOOK EVENTS
 
 @app.route("/webhook", methods=["POST"])
@@ -52,6 +53,7 @@ def webhook():
     print("Webhook Data:", data)
 
     try:
+
         for entry in data.get("entry", []):
 
             changes = entry.get("changes", [])
@@ -68,6 +70,8 @@ def webhook():
 
                     print("LEADGEN ID:", leadgen_id)
 
+                    # FETCH LEAD DATA FROM META
+
                     lead_url = f"https://graph.facebook.com/v25.0/{leadgen_id}"
 
                     params = {
@@ -83,8 +87,11 @@ def webhook():
 
                     field_data = lead_data.get("field_data", [])
 
+                    # ERP LEAD PAYLOAD
+
                     lead = {
-                        "doctype": "Lead"
+                        "doctype": "Lead",
+                        "source": "Instagram Campaign"
                     }
 
                     for field in field_data:
@@ -98,21 +105,51 @@ def webhook():
 
                             print(f"FIELD: {name} = {value}")
 
-                            if name == "full_name":
-                                lead["lead_name"] = value
+                            # NAME FIELDS
 
-                            elif name == "phone_number":
+                            if name in [
+                                "full_name",
+                                "name",
+                                "your_name"
+                            ]:
+
+                                lead["lead_name"] = value
+                                lead["first_name"] = value
+
+                            # PHONE FIELDS
+
+                            elif name in [
+                                "phone_number",
+                                "phone",
+                                "mobile_number"
+                            ]:
+
                                 lead["mobile_no"] = value
 
-                            elif name == "email":
+                            # EMAIL FIELDS
+
+                            elif name in [
+                                "email",
+                                "email_address"
+                            ]:
+
                                 lead["email_id"] = value
 
+                            # OTHER FIELDS
+
                             else:
+
                                 lead[name] = value
 
-                    lead["source"] = "Instagram Campaign"
+                    # FALLBACK NAME
+
+                    if not lead.get("lead_name"):
+
+                        lead["lead_name"] = "Instagram Lead"
 
                     print("FINAL ERP LEAD PAYLOAD:", lead)
+
+                    # SEND TO ERP
 
                     response = requests.post(
                         f"{ERP_URL}/api/resource/Lead",
@@ -126,6 +163,7 @@ def webhook():
         return "EVENT_RECEIVED", 200
 
     except Exception as e:
+
         print("ERROR:", str(e))
         return "ERROR", 500
 
