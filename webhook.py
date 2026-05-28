@@ -107,18 +107,22 @@ def webhook():
 
                             # NAME FIELDS
 
-                            if name in [
-                                "full_name",
-                                "name",
-                                "your_name"
-                            ]:
+                            if name.lower() in [
+                            "full_name",
+                            "full name",
+                             "name",
+                            "your_name",
+                            "customer_name",
+                            "contact_name",
+                             "first_name"
+]:
 
                                 lead["lead_name"] = value
                                 lead["first_name"] = value
 
                             # PHONE FIELDS
 
-                            elif name in [
+                            elif name.lower() in [
                                 "phone_number",
                                 "phone",
                                 "mobile_number"
@@ -128,7 +132,7 @@ def webhook():
 
                             # EMAIL FIELDS
 
-                            elif name in [
+                            elif name.lower() in [
                                 "email",
                                 "email_address"
                             ]:
