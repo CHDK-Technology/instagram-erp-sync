@@ -79,7 +79,6 @@ def webhook():
                     "source": "Instagram Campaign",      # exact value from your ERPNext picklist
                     "status": "Lead",                    # FIX 7: Required field in ERPNext Lead
                     "company_name": "Instagram Lead",
-                    "company": "Instagram Lead",
                     "email_id": "",
                     "mobile_no": ""
                 }
