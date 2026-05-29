@@ -110,7 +110,12 @@ def webhook():
                         "phone_number", "phone", "mobile_number",
                         "phone number", "mobile", "contact_number"
                     ]:
-                        lead["mobile_no"] = value
+                        # Only set if it looks like a real phone number (digits, +, spaces, dashes)
+                        clean_phone = re.sub(r"[^0-9+\-\s()]", "", value).strip()
+                        if clean_phone and len(clean_phone) >= 7:
+                            lead["mobile_no"] = clean_phone
+                        else:
+                            print(f"SKIPPED invalid phone: {value}")
 
                     # Email fields
                     elif name in ["email", "email_address", "email address"]:
