@@ -151,9 +151,9 @@ def webhook():
                     clean_phone = re.sub(r"[^0-9+\-\s()]", "", phone).strip()
                     lead["mobile_no"] = clean_phone
 
-                # Save custom question answers in notes field
+                # Save custom question answers in lead_details (text field)
                 if notes:
-                    lead["notes"] = notes
+                    lead["lead_details"] = notes
 
                 print("FINAL ERP PAYLOAD:", lead)
 
