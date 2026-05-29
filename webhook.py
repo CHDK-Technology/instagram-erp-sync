@@ -1,5 +1,6 @@
 from flask import Flask, request  # type: ignore
 import requests
+import re
 import os
 from dotenv import load_dotenv  # FIX 1: Missing load_dotenv import
 
@@ -91,6 +92,8 @@ def webhook():
                         continue
 
                     value = str(values[0]).strip()
+                    # Strip special characters ERPNext rejects in name fields
+                    value = re.sub(r"[<>]", "", value).strip()
                     print(f"FIELD: {name} = {value}")
 
                     # Name fields
