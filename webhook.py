@@ -136,17 +136,20 @@ def webhook():
                     "lead_name": full_name,
                     "first_name": full_name,
                     "last_name": "Instagram",
-                    "company_name": "Eco Saras Group",  # must match ERPNext company master
+                    "company": "Eco Saras Group",        # linked company field
+                    "company_name": "Eco Saras Group",   # text company field
                     "source": "Instagram Campaign",      # exact ERPNext picklist value
                     "status": "Lead",                    # exact ERPNext picklist value
-                    "lead_type": "B2C",                  # exact ERPNext picklist value
+                    "custom_lead_type": "B2C",           # your custom field name
+                    "lead_type": "B2C",                  # standard field
+                    "mobile_no": "0000000000",           # fallback, overwritten if real phone exists
                 }
 
                 # Only add email if it looks real
                 if email and "@" in email:
                     lead["email_id"] = email
 
-                # Only add phone if it looks real
+                # Use real phone if valid, otherwise keep fallback 0000000000
                 if phone and is_valid_phone(phone):
                     clean_phone = re.sub(r"[^0-9+\-\s()]", "", phone).strip()
                     lead["mobile_no"] = clean_phone
