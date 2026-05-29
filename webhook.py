@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask, request  # type: ignore
 import requests
 import os
 
