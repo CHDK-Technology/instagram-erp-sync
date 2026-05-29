@@ -4,7 +4,7 @@ import os
 
 app = Flask(__name__)
 
-VERIFY_TOKEN = "Ecosaras2026"
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "Ecosaras2026")
 
 ERP_URL = os.getenv("ERP_URL")
 API_KEY = os.getenv("API_KEY")
@@ -17,152 +17,124 @@ headers = {
 }
 
 
-# WEBHOOK VERIFICATION
-
 @app.route("/webhook", methods=["GET"])
 def verify():
-
-    print("VERIFY REQUEST RECEIVED")
-    print("ARGS:", request.args)
 
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
-    print("MODE:", mode)
-    print("TOKEN:", token)
-
     if mode and token:
         if mode == "subscribe" and token == VERIFY_TOKEN:
-            print("WEBHOOK VERIFIED SUCCESSFULLY")
             return challenge, 200
 
-    print("VERIFICATION FAILED")
     return "Verification failed", 403
 
-
-
-# WEBHOOK EVENTS
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
 
-    print("POST RECEIVED")
-
-    data = request.json
-    print("Webhook Data:", data)
-
     try:
+
+        data = request.json
+
+        print("WEBHOOK DATA:", data)
 
         for entry in data.get("entry", []):
 
-            changes = entry.get("changes", [])
-
-            for change in changes:
+            for change in entry.get("changes", []):
 
                 print("CHANGE:", change)
 
-                if change.get("field") == "leadgen":
+                if change.get("field") != "leadgen":
+                    continue
 
-                    print("LEADGEN EVENT RECEIVED")
+                leadgen_id = change["value"]["leadgen_id"]
 
-                    leadgen_id = change["value"]["leadgen_id"]
+                print("LEADGEN EVENT RECEIVED")
+                print("LEADGEN ID:", leadgen_id)
 
-                    print("LEADGEN ID:", leadgen_id)
+                lead_url = f"https://graph.facebook.com/v25.0/{leadgen_id}"
 
-                    # FETCH LEAD DATA FROM META
-
-                    lead_url = f"https://graph.facebook.com/v25.0/{leadgen_id}"
-
-                    params = {
+                lead_data = requests.get(
+                    lead_url,
+                    params={
                         "access_token": ACCESS_TOKEN
                     }
+                ).json()
 
-                    lead_data = requests.get(
-                        lead_url,
-                        params=params
-                    ).json()
+                print("LEAD DATA:", lead_data)
 
-                    print("LEAD DATA:", lead_data)
+                if lead_data.get("error"):
+                    print("META ERROR:", lead_data)
+                    continue
 
-                    field_data = lead_data.get("field_data", [])
+                field_data = lead_data.get("field_data", [])
 
-                    # ERP LEAD PAYLOAD
+                lead = {
+                    "doctype": "Lead",
+                    "company": "Instagram Lead",
+                    "last_name": "Instagram",
+                    "source": "Instagram Campaign",
+                    "lead_type": "Client",
+                    "email_id": "instagram@lead.com",
+                    "mobile_no": "0000000000"
+                }
 
-                    lead = {
-                        "doctype": "Lead",
-                        "source": "Instagram Campaign"
-                    }
+                for field in field_data:
 
-                    for field in field_data:
+                    name = field.get("name", "").lower()
+                    values = field.get("values", [])
 
-                        name = field.get("name")
-                        values = field.get("values", [])
+                    if not values:
+                        continue
 
-                        if values:
+                    value = values[0]
 
-                            value = values[0]
+                    print(f"FIELD: {name} = {value}")
 
-                            print(f"FIELD: {name} = {value}")
+                    if name in [
+                        "full_name",
+                        "full name",
+                        "name",
+                        "your_name",
+                        "customer_name",
+                        "contact_name",
+                        "first_name"
+                    ]:
+                        lead["lead_name"] = value
+                        lead["first_name"] = value
 
-                            # NAME FIELDS
+                    elif name in [
+                        "phone_number",
+                        "phone",
+                        "mobile_number",
+                        "phone number"
+                    ]:
+                        lead["mobile_no"] = value
 
-                            if name.lower() in [
-                            "full_name",
-                            "full name",
-                             "name",
-                            "your_name",
-                            "customer_name",
-                            "contact_name",
-                             "first_name"
-]:
+                    elif name in [
+                        "email",
+                        "email_address"
+                    ]:
+                        lead["email_id"] = value
 
-                                lead["lead_name"] = value
-                                lead["first_name"] = value
+                    else:
+                        lead[name] = value
 
-                            # PHONE FIELDS
+                if not lead.get("lead_name"):
+                    lead["lead_name"] = "Instagram Lead"
 
-                            elif name.lower() in [
-                                "phone_number",
-                                "phone",
-                                "mobile_number"
-                            ]:
+                print("FINAL ERP LEAD PAYLOAD:", lead)
 
-                                lead["mobile_no"] = value
+                response = requests.post(
+                    f"{ERP_URL}/api/resource/Lead",
+                    json=lead,
+                    headers=headers
+                )
 
-                            # EMAIL FIELDS
-
-                            elif name.lower() in [
-                                "email",
-                                "email_address"
-                            ]:
-
-                                lead["email_id"] = value
-
-                            # OTHER FIELDS
-
-                            else:
-
-                                lead[name] = value
-
-                    # FALLBACK NAME
-
-                    if not lead.get("lead_name"):
-
-                        lead["lead_name"] = "Instagram Lead"
-
-                    print("FINAL ERP LEAD PAYLOAD:", lead)
-
-                    # SEND TO ERP
-
-                    response = requests.post(
-                        f"{ERP_URL}/api/resource/Lead",
-                        json=lead,
-                        headers=headers
-                    )
-
-                    print("ERP STATUS CODE:", response.status_code)
-                    print("ERP RESPONSE:", response.text)
+                print("ERP STATUS CODE:", response.status_code)
+                print("ERP RESPONSE:", response.text)
 
         return "EVENT_RECEIVED", 200
 
