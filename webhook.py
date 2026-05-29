@@ -75,10 +75,11 @@ def webhook():
                     "doctype": "Lead",
                     "lead_name": "Instagram Lead",       # fallback, overwritten below
                     "first_name": "Instagram Lead",      # fallback
-                    "last_name": "",
-                    "source": "Social Media",            # FIX 6: "Social Media" is standard ERPNext option
+                    "last_name": "Instagram",            # required field in ERPNext
+                    "source": "Instagram Campaign",      # exact value from your ERPNext picklist
                     "status": "Lead",                    # FIX 7: Required field in ERPNext Lead
-                    "company_name": "Instagram Lead",    # FIX 8: correct field name (not "company")
+                    "company_name": "Instagram Lead",
+                    "company": "Instagram Lead",
                     "email_id": "",
                     "mobile_no": ""
                 }
