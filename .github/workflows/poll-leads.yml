@@ -1,0 +1,30 @@
+name: Lead Backup Poller
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # every 15 minutes (backup for the Render webhook)
+  workflow_dispatch:
+
+jobs:
+  poll-leads:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Lead Poller
+        env:
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+          PAGE_ID: ${{ secrets.PAGE_ID }}
+          ERP_URL: ${{ secrets.ERP_URL }}
+          API_KEY: ${{ secrets.API_KEY }}
+          API_SECRET: ${{ secrets.API_SECRET }}
+        run: python poll_leads.py
