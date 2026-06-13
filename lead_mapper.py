@@ -28,6 +28,10 @@ CUSTOM_LEAD_TYPE = "B2C"             # valid custom_lead_type option
 # You must create this field once (see SETUP). If it is missing, dedup is skipped.
 DEDUP_FIELD = "custom_meta_lead_id"
 
+# Existing field on your Lead doctype used to store the lead's extra answers.
+# (The standard "lead_details" field does NOT exist on this instance.)
+NOTES_FIELD = "custom_message"
+
 # Meta field names we recognise as the standard contact fields. Anything NOT in
 # these lists is treated as a custom question and appended to lead_details.
 NAME_KEYS = ("full_name", "name", "full name", "first_name")
@@ -113,7 +117,7 @@ def build_lead_payload(parsed, leadgen_id=None):
     if email:
         lead["email_id"] = email
     if notes:
-        lead["lead_details"] = notes
+        lead[NOTES_FIELD] = notes
     if leadgen_id:
         lead[DEDUP_FIELD] = str(leadgen_id)
     return lead
