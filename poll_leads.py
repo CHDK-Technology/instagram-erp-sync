@@ -1,20 +1,20 @@
 """
 poll_leads.py
-Backup lead poller - runs every 15 minutes in GitHub Actions.
+Backfill + backup lead poller (runs in GitHub Actions).
 
-Why this exists: the Render webhook is the primary, real-time path, but Render's
-free tier sleeps when idle and can miss a webhook during a slow cold start. This
-script re-pulls recent leads from every form on every Page and creates any that
-aren't already in ERPNext (dedup via custom_meta_lead_id), so no lead is ever lost.
+Key detail: Meta requires a PAGE access token to read leadgen_forms/leads.
+So this uses the user ACCESS_TOKEN to call /me/accounts, which returns each
+Page together with its own Page access token, then uses that Page token to
+read the Page's forms and leads. One user token therefore covers every Page.
 
-PAGE_ID may be a single Page ID OR several separated by commas, e.g.
-  169905769529898,373953099129089,427508580450359
-Pages the token can't access are skipped with a warning (the run still succeeds).
+Only leads created on/after LEADS_SINCE are imported (keeps stale leads out;
+default 2026-01-01). Dedup is via custom_meta_lead_id, so re-running is safe.
 
 Required GitHub secrets:
-  ACCESS_TOKEN  (non-expiring token with leads_retrieval + pages_show_list scope)
-  PAGE_ID       (one or more Facebook Page IDs, comma-separated)
+  ACCESS_TOKEN  (user token with leads_retrieval + pages_show_list)
   ERP_URL, API_KEY, API_SECRET
+Optional:
+  LEADS_SINCE   (YYYY-MM-DD; earliest lead date to import, default 2026-01-01)
 """
 
 import os
@@ -23,81 +23,91 @@ import requests
 import lead_mapper  # shared mapping + ERPNext create/dedup
 
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
-PAGE_ID = os.getenv("PAGE_ID", "")
-GRAPH_VERSION = "v25.0"
-
-# How many recent leads to check per form each run.
-LEADS_PER_FORM = 50
+GRAPH = "v25.0"
+LEADS_SINCE = os.getenv("LEADS_SINCE", "2026-01-01")
+MAX_PER_FORM = 5000  # safety cap
 
 
-def page_ids():
-    """Parse PAGE_ID into a clean list (accepts commas and/or spaces)."""
-    return [p.strip() for p in PAGE_ID.replace(",", " ").split() if p.strip()]
-
-
-def get_forms(page_id):
-    """List all lead-gen forms on one Page. Returns [] on error (logged)."""
-    resp = requests.get(
-        f"https://graph.facebook.com/{GRAPH_VERSION}/{page_id}/leadgen_forms",
-        params={"access_token": ACCESS_TOKEN, "limit": 100},
+def get_pages():
+    r = requests.get(
+        f"https://graph.facebook.com/{GRAPH}/me/accounts",
+        params={"access_token": ACCESS_TOKEN, "fields": "name,id,access_token", "limit": 100},
         timeout=30,
     )
-    data = resp.json()
-    if data.get("error"):
-        print(f"  SKIP page {page_id}: {data['error'].get('message')}")
+    d = r.json()
+    if d.get("error"):
+        print("ERROR /me/accounts:", d["error"].get("message"))
         return []
-    return data.get("data", [])
+    return d.get("data", [])
 
 
-def get_leads(form_id):
-    """Fetch recent leads for one form."""
-    resp = requests.get(
-        f"https://graph.facebook.com/{GRAPH_VERSION}/{form_id}/leads",
-        params={"access_token": ACCESS_TOKEN, "limit": LEADS_PER_FORM},
+def get_forms(page_id, page_token):
+    r = requests.get(
+        f"https://graph.facebook.com/{GRAPH}/{page_id}/leadgen_forms",
+        params={"access_token": page_token, "fields": "id,name", "limit": 100},
         timeout=30,
     )
-    data = resp.json()
-    if data.get("error"):
-        print(f"  META ERROR fetching leads for form {form_id}: {data['error'].get('message')}")
+    d = r.json()
+    if d.get("error"):
+        print(f"  SKIP forms on {page_id}: {d['error'].get('message')}")
         return []
-    return data.get("data", [])
+    return d.get("data", [])
+
+
+def iter_leads(form_id, page_token):
+    """Yield leads newest-first, stopping at LEADS_SINCE or the safety cap."""
+    url = f"https://graph.facebook.com/{GRAPH}/{form_id}/leads"
+    params = {"access_token": page_token, "limit": 100}
+    count = 0
+    while url and count < MAX_PER_FORM:
+        r = requests.get(url, params=params, timeout=30)
+        d = r.json()
+        if d.get("error"):
+            print(f"    leads error on {form_id}: {d['error'].get('message')}")
+            return
+        for ld in d.get("data", []):
+            if (ld.get("created_time", "")[:10]) < LEADS_SINCE:
+                return  # newest-first, so once we hit older we're done
+            count += 1
+            yield ld
+        url = (d.get("paging") or {}).get("next")
+        params = None  # the "next" URL already carries cursor + token
 
 
 def main():
-    missing = [k for k, v in {
+    for k, v in {
         "ACCESS_TOKEN": ACCESS_TOKEN,
-        "PAGE_ID": PAGE_ID,
         "ERP_URL": lead_mapper.ERP_URL,
         "API_KEY": lead_mapper.API_KEY,
         "API_SECRET": lead_mapper.API_SECRET,
-    }.items() if not v]
-    if missing:
-        raise EnvironmentError(f"Missing environment variables: {', '.join(missing)}")
+    }.items():
+        if not v:
+            raise EnvironmentError(f"Missing environment variable: {k}")
 
-    ids = page_ids()
-    print(f"Checking {len(ids)} Page(s): {', '.join(ids)}")
+    pages = get_pages()
+    print(f"Found {len(pages)} page(s) via /me/accounts. Importing leads since {LEADS_SINCE}.")
 
-    created = skipped = failed = total_forms = 0
-    for page_id in ids:
-        forms = get_forms(page_id)
-        if forms:
-            print(f"Page {page_id}: {len(forms)} form(s) -> {[f.get('name') for f in forms]}")
-        total_forms += len(forms)
-        for form in forms:
-            leads = get_leads(form["id"])
-            print(f"  Form '{form.get('name')}' ({form['id']}): {len(leads)} recent lead(s).")
-            for lead in leads:
-                ok, msg = lead_mapper.create_lead(lead.get("field_data", []), lead.get("id"))
+    created = skipped = failed = 0
+    for p in pages:
+        ptoken = p.get("access_token")
+        if not ptoken:
+            continue
+        for f in get_forms(p["id"], ptoken):
+            n = 0
+            for ld in iter_leads(f["id"], ptoken):
+                n += 1
+                ok, msg = lead_mapper.create_lead(ld.get("field_data", []), ld.get("id"))
                 if ok:
                     created += 1
                 elif msg.startswith("Duplicate"):
                     skipped += 1
                 else:
                     failed += 1
-                    print("  FAILED:", msg)
+                    print("    FAILED:", msg)
+            if n:
+                print(f"  {p['name']} / {f['name']}: {n} lead(s) in range")
 
-    print(f"DONE - pages={len(ids)}, forms={total_forms}, "
-          f"created={created}, skipped(dupe)={skipped}, failed={failed}")
+    print(f"DONE - created={created}, skipped(dupe)={skipped}, failed={failed}")
 
 
 if __name__ == "__main__":
