@@ -102,10 +102,16 @@ def build_lead_payload(parsed, leadgen_id=None):
     ]
     notes = " | ".join(notes_parts)
 
+    # ERPNext requires last_name on Lead; split the full name into first/last.
+    name_parts = full_name.split()
+    first_name = name_parts[0] if name_parts else full_name
+    last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else first_name
+
     lead = {
         "doctype": "Lead",
         "lead_name": full_name,
-        "first_name": full_name,
+        "first_name": first_name,
+        "last_name": last_name,
         "company": COMPANY,
         "company_name": COMPANY,
         "source": SOURCE,
@@ -152,9 +158,7 @@ def create_lead(field_data, leadgen_id=None):
         return False, f"Duplicate skipped (leadgen_id={leadgen_id})"
 
     parsed = parse_field_data(field_data)
-    print("PARSED FIELDS:", parsed)
     payload = build_lead_payload(parsed, leadgen_id)
-    print("ERP PAYLOAD:", payload)
 
     try:
         resp = requests.post(
@@ -166,8 +170,6 @@ def create_lead(field_data, leadgen_id=None):
     except Exception as e:
         return False, f"ERPNext request failed: {e}"
 
-    print("ERP STATUS:", resp.status_code)
-    print("ERP RESPONSE:", resp.text[:500])
     if resp.status_code in (200, 201):
         return True, "Lead created"
     return False, f"ERPNext rejected ({resp.status_code}): {resp.text[:300]}"
