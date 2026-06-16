@@ -2,30 +2,41 @@
 poll_leads.py
 Backfill + backup lead poller (runs in GitHub Actions).
 
-Key detail: Meta requires a PAGE access token to read leadgen_forms/leads.
-So this uses the user ACCESS_TOKEN to call /me/accounts, which returns each
-Page together with its own Page access token, then uses that Page token to
-read the Page's forms and leads. One user token therefore covers every Page.
+Uses the user ACCESS_TOKEN to call /me/accounts (gets each Page + its own Page
+token), then reads each Page's forms and leads with that Page token. One user
+token therefore covers every Page.
 
-Only leads created on/after LEADS_SINCE are imported (keeps stale leads out;
-default 2026-01-01). Dedup is via custom_meta_lead_id, so re-running is safe.
+Each lead is tagged with the product it came from (derived from the form name)
+and upserted into ERPNext via lead_mapper (creates new, updates older ones).
 
-Required GitHub secrets:
-  ACCESS_TOKEN  (user token with leads_retrieval + pages_show_list)
-  ERP_URL, API_KEY, API_SECRET
-Optional:
-  LEADS_SINCE   (YYYY-MM-DD; earliest lead date to import, default 2026-01-01)
+Only leads created on/after LEADS_SINCE are imported (default 2026-01-01).
 """
 
 import os
 import requests
 
-import lead_mapper  # shared mapping + ERPNext create/dedup
+import lead_mapper
 
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 GRAPH = "v25.0"
 LEADS_SINCE = os.getenv("LEADS_SINCE", "2026-01-01")
-MAX_PER_FORM = 5000  # safety cap
+MAX_PER_FORM = 5000
+
+
+def product_from_form(form_name):
+    """Turn a Meta form name into a short, clean product label."""
+    f = (form_name or "").lower()
+    if "ecofoam" in f or "puf" in f or "panel" in f:
+        return "PUF Panel"
+    if "cold storage" in f:
+        return "Cold Storage"
+    if "dehydrator" in f:
+        return "Solar Food Dehydrator"
+    if "solar tree" in f:
+        return "Solar Tree"
+    if "dryer" in f:
+        return "Solar Dryer"
+    return form_name or None
 
 
 def get_pages():
@@ -67,11 +78,11 @@ def iter_leads(form_id, page_token):
             return
         for ld in d.get("data", []):
             if (ld.get("created_time", "")[:10]) < LEADS_SINCE:
-                return  # newest-first, so once we hit older we're done
+                return
             count += 1
             yield ld
         url = (d.get("paging") or {}).get("next")
-        params = None  # the "next" URL already carries cursor + token
+        params = None
 
 
 def main():
@@ -87,17 +98,20 @@ def main():
     pages = get_pages()
     print(f"Found {len(pages)} page(s) via /me/accounts. Importing leads since {LEADS_SINCE}.")
 
-    created = skipped = failed = 0
+    created = updated = skipped = failed = 0
     for p in pages:
         ptoken = p.get("access_token")
         if not ptoken:
             continue
         for f in get_forms(p["id"], ptoken):
+            product = product_from_form(f.get("name"))
             n = 0
             for ld in iter_leads(f["id"], ptoken):
                 n += 1
-                ok, msg = lead_mapper.create_lead(ld.get("field_data", []), ld.get("id"))
-                if ok:
+                ok, msg = lead_mapper.create_lead(ld.get("field_data", []), ld.get("id"), product)
+                if ok and msg == "Lead updated":
+                    updated += 1
+                elif ok:
                     created += 1
                 elif msg.startswith("Duplicate"):
                     skipped += 1
@@ -105,9 +119,9 @@ def main():
                     failed += 1
                     print("    FAILED:", msg)
             if n:
-                print(f"  {p['name']} / {f['name']}: {n} lead(s) in range")
+                print(f"  {p['name']} / {f.get('name')} [{product}]: {n} lead(s)")
 
-    print(f"DONE - created={created}, skipped(dupe)={skipped}, failed={failed}")
+    print(f"DONE - created={created}, updated={updated}, skipped(dupe)={skipped}, failed={failed}")
 
 
 if __name__ == "__main__":
