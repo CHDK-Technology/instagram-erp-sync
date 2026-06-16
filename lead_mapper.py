@@ -6,13 +6,17 @@ Used by BOTH:
   - webhook.py    (real-time, runs on Render)
   - poll_leads.py (15-min backup poller, runs in GitHub Actions)
 
-Readability design:
-  - company_name is set to the PERSON'S name, so the Lead list "Title" and
-    "Customer Name" columns show the customer (not the parent company). The
-    internal `company` link still points to Eco Saras Group.
-  - custom_product_name holds the product (drives the "Product Name" column).
-  - city / state are mapped to their own fields; the rest of the answers go to
-    the Message field.
+Each Meta answer is mapped to its own ERPNext field so leads are fully
+structured and filterable:
+  - company_name      = the person's name (drives Title / Customer Name columns)
+  - custom_product_name = the SPECIFIC product the customer picked
+                          ("vegetable_cooler" -> "Vegetable Cooler"); falls back
+                          to the form-derived category when the form doesn't ask.
+  - custom_module_capacity = capacity answer (e.g. "5-20 Kg (Solar Dryer)")
+  - custom_purpose         = purpose answer (e.g. "Farming")
+  - custom_farm_size       = land / farm size answer (e.g. "2-5 Acre")
+  - city / state           = mapped to their own fields
+  - custom_message         = the full raw Q&A, kept as a complete record
 """
 
 import os
@@ -23,13 +27,16 @@ ERP_URL = os.getenv("ERP_URL")
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
 
-COMPANY = "Eco Saras Group"          # internal Company link
+COMPANY = "Eco Saras Group"
 SOURCE = "Instagram Campaign"
 STATUS = "Lead"
 CUSTOM_LEAD_TYPE = "B2C"
 DEDUP_FIELD = "custom_meta_lead_id"
 NOTES_FIELD = "custom_message"
 PRODUCT_FIELD = "custom_product_name"
+CAPACITY_FIELD = "custom_module_capacity"
+PURPOSE_FIELD = "custom_purpose"
+FARM_FIELD = "custom_farm_size"
 
 NAME_KEYS = ("full_name", "name", "full name", "first_name")
 PHONE_KEYS = ("phone_number", "phone", "mobile_number", "mobile", "contact_number")
@@ -37,12 +44,12 @@ EMAIL_KEYS = ("email", "email_address")
 CITY_KEYS = ("city", "town/city", "town", "city/town", "town_city")
 STATE_KEYS = ("state", "province")
 
+# Fields ERPNext owns from Meta; used to decide whether an existing lead needs updating.
+MANAGED_FIELDS = ("company_name", "city", "state", PRODUCT_FIELD, CAPACITY_FIELD, PURPOSE_FIELD, FARM_FIELD)
+
 
 def get_headers():
-    return {
-        "Authorization": f"token {API_KEY}:{API_SECRET}",
-        "Content-Type": "application/json",
-    }
+    return {"Authorization": f"token {API_KEY}:{API_SECRET}", "Content-Type": "application/json"}
 
 
 def clean_text(value):
@@ -62,6 +69,11 @@ def humanize(key):
     return key.replace("_", " ").strip().title()
 
 
+def humanize_value(value):
+    """'vegetable_cooler' -> 'Vegetable Cooler'; '5-20_kg_(solar_dryer)' -> '5-20 Kg (Solar Dryer)'."""
+    return re.sub(r"\s+", " ", str(value).replace("_", " ")).strip().title()
+
+
 def parse_field_data(field_data):
     parsed = {}
     for field in field_data or []:
@@ -70,6 +82,14 @@ def parse_field_data(field_data):
         if name and values:
             parsed[name] = clean_text(values[0])
     return parsed
+
+
+def find_answer(parsed, *substrings):
+    """Return the answer to the first question whose key contains any of the substrings."""
+    for k, v in parsed.items():
+        if v and any(s in k for s in substrings):
+            return v
+    return None
 
 
 def build_lead_payload(parsed, leadgen_id=None, product=None):
@@ -86,6 +106,15 @@ def build_lead_payload(parsed, leadgen_id=None, product=None):
     city = next((parsed[k] for k in CITY_KEYS if parsed.get(k)), None)
     state = next((parsed[k] for k in STATE_KEYS if parsed.get(k)), None)
 
+    # The specific product the customer picked; else fall back to the form-derived category.
+    product_answer = find_answer(parsed, "which_product", "product_are_you_interested")
+    if product_answer:
+        product = humanize_value(product_answer)
+
+    capacity = find_answer(parsed, "capacity")
+    purpose = find_answer(parsed, "purpose")
+    farm_size = find_answer(parsed, "size_of_your_farm", "farm_size", "land_size", "size_of_land")
+
     handled = set(NAME_KEYS) | set(PHONE_KEYS) | set(EMAIL_KEYS) | set(CITY_KEYS) | set(STATE_KEYS)
     notes_parts = [f"{humanize(k)}: {v}" for k, v in parsed.items() if k not in handled and v]
     notes = " | ".join(notes_parts)
@@ -99,8 +128,8 @@ def build_lead_payload(parsed, leadgen_id=None, product=None):
         "lead_name": full_name,
         "first_name": first_name,
         "last_name": last_name,
-        "company": COMPANY,           # internal company (link)
-        "company_name": full_name,    # -> Title / Customer Name = the person
+        "company": COMPANY,
+        "company_name": full_name,
         "source": SOURCE,
         "status": STATUS,
         "custom_lead_type": CUSTOM_LEAD_TYPE,
@@ -113,25 +142,33 @@ def build_lead_payload(parsed, leadgen_id=None, product=None):
         lead["city"] = city
     if state:
         lead["state"] = state
-    if notes:
-        lead[NOTES_FIELD] = notes
     if product:
         lead[PRODUCT_FIELD] = product
+    if capacity:
+        lead[CAPACITY_FIELD] = humanize_value(capacity)
+    if purpose:
+        lead[PURPOSE_FIELD] = humanize_value(purpose)
+    if farm_size:
+        lead[FARM_FIELD] = humanize_value(farm_size)
+    if notes:
+        lead[NOTES_FIELD] = notes
     if leadgen_id:
         lead[DEDUP_FIELD] = str(leadgen_id)
     return lead
 
 
 def find_existing(leadgen_id):
-    """Return (name, company_name) for an existing Lead with this Meta id, else (None, None)."""
+    """Return the existing Lead's managed-field values (dict incl. 'name'), or None."""
     if not leadgen_id:
-        return None, None
+        return None
+    fields = '["name","company_name","city","state","' + '","'.join(
+        [PRODUCT_FIELD, CAPACITY_FIELD, PURPOSE_FIELD, FARM_FIELD]) + '"]'
     try:
         resp = requests.get(
             f"{ERP_URL}/api/resource/Lead",
             params={
                 "filters": f'[["{DEDUP_FIELD}","=","{leadgen_id}"]]',
-                "fields": '["name","company_name"]',
+                "fields": fields,
                 "limit_page_length": 1,
             },
             headers=get_headers(),
@@ -140,33 +177,33 @@ def find_existing(leadgen_id):
         if resp.status_code == 200:
             data = resp.json().get("data") or []
             if data:
-                return data[0]["name"], data[0].get("company_name")
-        return None, None
+                return data[0]
+        return None
     except Exception as e:
         print("FIND EXISTING FAILED (continuing):", e)
-        return None, None
+        return None
 
 
 def create_lead(field_data, leadgen_id=None, product=None):
     """
     Upsert one lead into ERPNext.
-      - brand new                  -> POST (create)
-      - exists, still old-format   -> PUT  (fix name/product/city/state; re-save recomputes title)
-      - exists, already fixed      -> skip
+      - new                      -> POST (create)
+      - exists, fields differ    -> PUT  (fill name/product/capacity/purpose/farm/city/state)
+      - exists, all fields match -> skip
     Returns (changed: bool, message: str).
     """
     parsed = parse_field_data(field_data)
     payload = build_lead_payload(parsed, leadgen_id, product)
 
-    name, current_company = find_existing(leadgen_id)
-    if name:
-        if current_company == payload.get("company_name"):
+    existing = find_existing(leadgen_id)
+    if existing:
+        want = {k: payload[k] for k in MANAGED_FIELDS if k in payload}
+        if all(existing.get(k) == v for k, v in want.items()):
             return False, f"Duplicate skipped (leadgen_id={leadgen_id})"
-        update = {k: payload[k] for k in ("company_name", "city", "state", PRODUCT_FIELD) if k in payload}
         try:
             resp = requests.put(
-                f"{ERP_URL}/api/resource/Lead/{name}",
-                json=update,
+                f"{ERP_URL}/api/resource/Lead/{existing['name']}",
+                json=want,
                 headers=get_headers(),
                 timeout=30,
             )
