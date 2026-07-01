@@ -36,7 +36,7 @@ CUSTOM_LEAD_TYPE = "B2C"
 
 DEDUP_FIELD = "custom_meta_lead_id"
 NOTES_FIELD = "custom_message"
-PRODUCTS_NOTES_FIELD = "custom_products_services_notes"  # ⚠️ confirm via Customize Form on Lead
+PRODUCTS_NOTES_FIELD = "custom_productsservices_notes"  # ⚠️ confirm via Customize Form on Lead
 PRODUCT_FIELD = "custom_product_name"
 CAPACITY_FIELD = "custom_module_capacity"
 PURPOSE_FIELD = "custom_purpose"
